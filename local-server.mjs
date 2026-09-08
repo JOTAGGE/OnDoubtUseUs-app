@@ -831,6 +831,20 @@ app.get('/api/stream', async (request, response) => {
   }
 });
 
+// Servir arquivos estáticos do frontend (para o executável desktop e acesso direto na porta 8787)
+const clientDist = join(process.cwd(), 'dist', 'client');
+if (existsSync(clientDist)) {
+  app.use(express.static(clientDist));
+  app.use((req, res, next) => {
+    if (req.method === 'GET' && !req.path.startsWith('/api')) {
+      return res.sendFile(join(clientDist, 'index.html'));
+    }
+    next();
+  });
+}
+
+
+
 const server = app.listen(PORT, HOST, () => {
   console.log(`[On Doubt, Use Us :)] Rodando em http://${HOST}:${PORT}`);
   console.log(`[On Doubt, Use Us :)] Destino local de downloads: ${outputRoot}`);
