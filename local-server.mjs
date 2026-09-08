@@ -595,13 +595,37 @@ app.post('/api/download', async (request, response) => {
   }
 });
 
-// Endpoint de streaming direto com proteção rigorosa
+// Controle de Concorrência & Fila para Streams de Mídia
+let activeStreamsCount = 0;
+const MAX_CONCURRENT_STREAMS = Number(process.env.MAX_CONCURRENT_STREAMS || 2);
+const streamQueue = [];
+
+function acquireStreamSlot() {
+  if (activeStreamsCount < MAX_CONCURRENT_STREAMS) {
+    activeStreamsCount++;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    streamQueue.push(resolve);
+  });
+}
+
+function releaseStreamSlot() {
+  if (streamQueue.length > 0) {
+    const next = streamQueue.shift();
+    next();
+  } else {
+    activeStreamsCount = Math.max(0, activeStreamsCount - 1);
+  }
+}
+
+// Endpoint de streaming direto com proteção rigorosa e fila de concorrência
 app.get('/api/stream', async (request, response) => {
   const clientIp = getClientIp(request);
-  const rate = checkRateLimit(clientIp, 'stream', 6, 60000);
+  const rate = checkRateLimit(clientIp, 'stream', 120, 60000);
   if (rate.limited) {
     response.setHeader('Retry-After', String(rate.retryAfter));
-    return response.status(429).json({ error: 'Muitos downloads simultâneos. Aguarde um minuto.' });
+    return response.status(429).json({ error: 'Muitos downloads simultâneos. Aguarde alguns instantes.' });
   }
 
   const { url, type = 'video', quality = '1080p · MP4', title = 'media' } = request.query;
@@ -629,6 +653,16 @@ app.get('/api/stream', async (request, response) => {
     : String(quality).includes('WEBM') ? 'webm' : 'mp4';
 
   const sanitizedTitle = sanitizePathSegment(String(title), 'media') + `.${ext}`;
+
+  // Aguarda liberação de slot na fila de stream para evitar sobrecarga de memória/CPU
+  await acquireStreamSlot();
+  let slotReleased = false;
+  const safeRelease = () => {
+    if (!slotReleased) {
+      slotReleased = true;
+      releaseStreamSlot();
+    }
+  };
 
   // Cabeçalhos de segurança obrigatórios para entrega de arquivos
   response.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
@@ -665,11 +699,16 @@ app.get('/api/stream', async (request, response) => {
     } catch {
       // Ignora
     }
+    safeRelease();
   });
 
   child.stdout.pipe(response);
   child.stderr.on('data', () => {});
+  child.on('close', () => {
+    safeRelease();
+  });
   child.on('error', () => {
+    safeRelease();
     if (!response.headersSent) {
       response.status(500).json({ error: 'Erro no stream do download.' });
     }

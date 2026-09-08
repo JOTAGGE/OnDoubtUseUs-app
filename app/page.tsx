@@ -506,10 +506,20 @@ export default function Home() {
     }, 0);
     const interval = setInterval(() => {
       void checkServerHealth(apiUrl);
-    }, 20000);
+    }, 15000);
+
+    const handleFocus = () => {
+      void checkServerHealth(apiUrl);
+    };
+
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('online', handleFocus);
+
     return () => {
       clearTimeout(timer);
       clearInterval(interval);
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('online', handleFocus);
     };
   }, [apiUrl]);
 
@@ -588,26 +598,72 @@ export default function Home() {
       const isRemote = !apiUrl.includes('127.0.0.1') && !apiUrl.includes('localhost');
 
       if (isRemote) {
-        // Modo Nuvem / Web: dispara o download direto para o navegador de cada usuário
-        items.forEach((item, idx) => {
-          setTimeout(() => {
+        // Modo Nuvem / Web: baixa item por item de forma sequencial sem sobrecarregar o servidor
+        // e sem redirecionar a aba do usuário para telas de erro
+        for (let i = 0; i < items.length; i++) {
+          if (controller.signal.aborted) break;
+          const item = items[i];
+          const itemNumber = i + 1;
+          const ext = mode === 'audio'
+            ? (quality.includes('M4A') ? 'm4a' : quality.includes('FLAC') ? 'flac' : 'mp3')
+            : (quality.includes('WEBM') ? 'webm' : 'mp4');
+
+          setStatus(
+            lang === 'pt'
+              ? `[${itemNumber}/${items.length}] Baixando: ${item.title}…`
+              : `[${itemNumber}/${items.length}] Downloading: ${item.title}…`
+          );
+          setProgress(Math.round(((itemNumber - 1) / items.length) * 100));
+
+          try {
             const streamUrl = `${apiUrl}/api/stream?url=${encodeURIComponent(item.url)}&type=${mode}&quality=${encodeURIComponent(
               quality
             )}&title=${encodeURIComponent(item.title)}`;
+
+            const streamRes = await fetch(streamUrl, {
+              signal: controller.signal,
+            });
+
+            if (!streamRes.ok) {
+              let errorMsg = `Erro ${streamRes.status}`;
+              try {
+                const errData = (await streamRes.json()) as { error?: string };
+                errorMsg = errData.error || errorMsg;
+              } catch {
+                // fallback
+              }
+              setError(`Item ${itemNumber} (${item.title}): ${errorMsg}`);
+              continue;
+            }
+
+            const blob = await streamRes.blob();
+            const blobUrl = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
-            a.href = streamUrl;
-            a.setAttribute('download', `${item.title}.${mode === 'audio' ? 'mp3' : 'mp4'}`);
+            a.style.display = 'none';
+            a.href = blobUrl;
+            a.download = `${item.title.replace(/[\\/:*?"<>|]/g, '_')}.${ext}`;
             document.body.appendChild(a);
             a.click();
-            document.body.removeChild(a);
-          }, idx * 1000);
-        });
-        setProgress(100);
-        setStatus(
-          lang === 'pt'
-            ? `Download iniciado no seu navegador (${items.length} ${items.length === 1 ? 'arquivo' : 'arquivos'})!`
-            : `Download started in your browser (${items.length} ${items.length === 1 ? 'file' : 'files'})!`
-        );
+            setTimeout(() => {
+              document.body.removeChild(a);
+              window.URL.revokeObjectURL(blobUrl);
+            }, 1000);
+
+            setProgress(Math.round((itemNumber / items.length) * 100));
+          } catch (itemErr) {
+            if (controller.signal.aborted) break;
+            setError(`Item ${itemNumber}: ${itemErr instanceof Error ? itemErr.message : 'Falha no download'}`);
+          }
+        }
+
+        if (!controller.signal.aborted) {
+          setProgress(100);
+          setStatus(
+            lang === 'pt'
+              ? `Concluído! Todos os arquivos foram baixados no seu dispositivo.`
+              : `Completed! All media files saved to your device.`
+          );
+        }
         setDownloading(false);
         abortControllerRef.current = null;
         return;
