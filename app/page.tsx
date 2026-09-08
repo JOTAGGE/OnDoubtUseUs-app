@@ -547,6 +547,21 @@ export default function Home() {
     };
   }, [apiUrl]);
 
+  function getFriendlyError(cause: unknown): string {
+    const raw = cause instanceof Error ? cause.message : 'Falha de conexão com o backend de download.';
+    if (raw.includes('Failed to fetch') || raw.includes('NetworkError') || raw.includes('Load failed')) {
+      if (typeof window !== 'undefined' && window.location.protocol === 'https:' && apiUrl.includes('127.0.0.1')) {
+        return lang === 'pt'
+          ? 'Erro de Conexão: Você está acessando a versão na Vercel (HTTPS). O navegador bloqueia requisições para http://127.0.0.1 por segurança. Para usar o app no seu PC, execute "npm run dev" e abra http://localhost:3000, ou conecte um backend HTTPS no ícone de Configurações (⚙️).'
+          : 'Connection Error: You are on HTTPS (Vercel). The browser blocks local http://127.0.0.1 requests. To run locally on your PC, execute "npm run dev" and open http://localhost:3000, or connect an HTTPS cloud backend in Settings (⚙️).';
+      }
+      return lang === 'pt'
+        ? `Serviço local offline em ${apiUrl}. Execute "npm run dev:server" no terminal para iniciar o motor.`
+        : `Download engine offline at ${apiUrl}. Run "npm run dev:server" in terminal to start the engine.`;
+    }
+    return raw;
+  }
+
   async function analyzeUrl(value = url) {
     if (!value.trim()) return;
     setAnalyzing(true);
@@ -572,11 +587,7 @@ export default function Home() {
       );
       setServerStatus('online');
     } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : 'Falha de conexão com o backend de download.'
-      );
+      setError(getFriendlyError(cause));
       setStatus('');
     } finally {
       setAnalyzing(false);
@@ -663,7 +674,7 @@ export default function Home() {
       if (controller.signal.aborted) {
         setStatus(t.downloadCancelled);
       } else {
-        setError(cause instanceof Error ? cause.message : 'Falha durante o download.');
+        setError(getFriendlyError(cause));
       }
     } finally {
       setDownloading(false);
