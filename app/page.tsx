@@ -42,6 +42,7 @@ import { Progress } from '@/components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { BACKEND_URL } from '@/lib/config';
 
 type MediaItem = {
   id: string;
@@ -429,9 +430,8 @@ export default function Home() {
   const [serverStatus, setServerStatus] = useState<'checking' | 'online' | 'offline'>('checking');
   const [serverInfo, setServerInfo] = useState<ServerHealth | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [apiUrl, setApiUrl] = useState<string>('http://127.0.0.1:8787');
-  const [customApiInput, setCustomApiInput] = useState<string>('http://127.0.0.1:8787');
   const [isHttpsOnClient, setIsHttpsOnClient] = useState(false);
+  const apiUrl = BACKEND_URL;
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -439,21 +439,12 @@ export default function Home() {
   const t = translations[lang];
   const total = useMemo(() => selected.length * (mode === 'video' ? 84 : 12), [selected, mode]);
 
-  // Carrega idioma, tema e URL do backend salvos
+  // Carrega idioma e tema salvos
   useEffect(() => {
     const timer = setTimeout(() => {
       try {
         if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
           setIsHttpsOnClient(true);
-        }
-        const savedApi = localStorage.getItem('oduu_api_url');
-        const defaultApi = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8787';
-        if (savedApi) {
-          setApiUrl(savedApi);
-          setCustomApiInput(savedApi);
-        } else {
-          setApiUrl(defaultApi);
-          setCustomApiInput(defaultApi);
         }
 
         const savedLang = localStorage.getItem('oduu_lang') as Language | null;
@@ -507,31 +498,6 @@ export default function Home() {
     } catch {
       setServerStatus('offline');
     }
-  }
-
-  function saveCustomApiUrl(newUrl: string) {
-    const cleaned = newUrl.trim().replace(/\/+$/, '');
-    if (!cleaned) return;
-    setApiUrl(cleaned);
-    setCustomApiInput(cleaned);
-    try {
-      localStorage.setItem('oduu_api_url', cleaned);
-    } catch {
-      // Ignora erro
-    }
-    void checkServerHealth(cleaned);
-  }
-
-  function resetApiUrl() {
-    const defaultUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8787';
-    setApiUrl(defaultUrl);
-    setCustomApiInput(defaultUrl);
-    try {
-      localStorage.removeItem('oduu_api_url');
-    } catch {
-      // Ignora erro
-    }
-    void checkServerHealth(defaultUrl);
   }
 
   useEffect(() => {
@@ -619,6 +585,34 @@ export default function Home() {
 
     try {
       const items = analysis.items.filter((item) => selected.includes(item.id));
+      const isRemote = !apiUrl.includes('127.0.0.1') && !apiUrl.includes('localhost');
+
+      if (isRemote) {
+        // Modo Nuvem / Web: dispara o download direto para o navegador de cada usuário
+        items.forEach((item, idx) => {
+          setTimeout(() => {
+            const streamUrl = `${apiUrl}/api/stream?url=${encodeURIComponent(item.url)}&type=${mode}&quality=${encodeURIComponent(
+              quality
+            )}&title=${encodeURIComponent(item.title)}`;
+            const a = document.createElement('a');
+            a.href = streamUrl;
+            a.setAttribute('download', `${item.title}.${mode === 'audio' ? 'mp3' : 'mp4'}`);
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          }, idx * 1000);
+        });
+        setProgress(100);
+        setStatus(
+          lang === 'pt'
+            ? `Download iniciado no seu navegador (${items.length} ${items.length === 1 ? 'arquivo' : 'arquivos'})!`
+            : `Download started in your browser (${items.length} ${items.length === 1 ? 'file' : 'files'})!`
+        );
+        setDownloading(false);
+        abortControllerRef.current = null;
+        return;
+      }
+
       const response = await fetch(`${apiUrl}/api/download`, {
         method: 'POST',
         signal: controller.signal,
@@ -830,15 +824,6 @@ export default function Home() {
               </span>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setSettingsOpen(true)}
-                className="h-7 text-xs border-amber-500/40 hover:bg-amber-500/20"
-              >
-                <Settings2 className="mr-1.5 h-3 w-3" />
-                {lang === 'pt' ? 'Configurar API' : 'Configure API'}
-              </Button>
               <Button
                 variant="outline"
                 size="sm"
@@ -1457,34 +1442,10 @@ export default function Home() {
           </DialogHeader>
 
           <div className="mt-4 space-y-3">
-            <div className={`rounded-xl border p-3.5 space-y-3 ${theme === 'dark' ? 'border-white/5 bg-black/40' : 'border-zinc-100 bg-zinc-50'}`}>
-              <div>
-                <label className={`block text-xs font-bold mb-1.5 ${theme === 'dark' ? 'text-zinc-300' : 'text-zinc-700'}`}>
-                  {t.diagApiUrl}
-                </label>
-                <div className="flex gap-2">
-                  <Input
-                    value={customApiInput}
-                    onChange={(e) => setCustomApiInput(e.target.value)}
-                    placeholder="http://127.0.0.1:8787 or https://..."
-                    className={`h-8 text-xs font-mono ${theme === 'dark' ? 'border-white/10 bg-black/50 text-white' : 'border-zinc-300 bg-white text-zinc-900'}`}
-                  />
-                  <Button
-                    size="sm"
-                    onClick={() => saveCustomApiUrl(customApiInput)}
-                    className="h-8 px-3 text-xs bg-[#0055ff] hover:bg-[#0047d6] text-white shrink-0 font-bold"
-                  >
-                    {t.diagSaveUrl}
-                  </Button>
-                </div>
-                {apiUrl !== (process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8787') && (
-                  <button
-                    onClick={resetApiUrl}
-                    className="mt-1.5 text-[11px] text-[#0055ff] hover:underline block"
-                  >
-                    {t.diagResetUrl}
-                  </button>
-                )}
+            <div className={`rounded-xl border p-3.5 space-y-2.5 ${theme === 'dark' ? 'border-white/5 bg-black/40' : 'border-zinc-100 bg-zinc-50'}`}>
+              <div className="flex items-center justify-between text-xs">
+                <span className={theme === 'dark' ? 'text-zinc-400' : 'text-zinc-500'}>{t.diagApiUrl}</span>
+                <span className="font-mono text-xs font-bold text-[#0055ff]">{apiUrl}</span>
               </div>
 
               <div className={`flex items-center justify-between text-xs pt-2 border-t ${theme === 'dark' ? 'border-white/5' : 'border-zinc-200'}`}>

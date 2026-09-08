@@ -14,7 +14,7 @@ const ytDlpPath = youtubeDl.constants.YOUTUBE_DL_PATH;
 
 // --- Configurações de Ambiente & Limites de Segurança ---
 const PORT = Number(process.env.PORT || 8787);
-const HOST = process.env.HOST || '127.0.0.1';
+const HOST = process.env.HOST || '0.0.0.0';
 const outputRoot = process.env.DOWNLOAD_DIR || join(homedir(), 'Downloads', 'On Doubt Use Us');
 
 const MAX_CONCURRENT_JOBS = Number(process.env.MAX_CONCURRENT_JOBS || 2);
@@ -46,7 +46,7 @@ const allowedOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN === '*'
     ? '*'
     : process.env.CORS_ORIGIN.split(',').map((o) => o.trim())
-  : ['http://localhost:3000', 'http://127.0.0.1:3000'];
+  : '*';
 
 const app = express();
 
