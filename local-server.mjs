@@ -3,9 +3,9 @@ import cors from 'cors';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
 import { existsSync, writeFileSync } from 'node:fs';
-import { mkdir, statfs } from 'node:fs/promises';
+import { mkdir, statfs, mkdtemp, stat, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 
 const require = createRequire(import.meta.url);
@@ -72,7 +72,7 @@ function getCookieArgs() {
 
 function getExtractorArgs() {
   const clients = process.env.YOUTUBE_PLAYER_CLIENTS?.trim();
-  return clients ? ['--extractor-args', `youtube:player_client=${clients}`] : [];
+  return ['--js-runtimes', `node:${process.execPath}`, ...(clients ? ['--extractor-args', `youtube:player_client=${clients}`] : [])];
 }
 
 function friendlyYtDlpError(stderr, fallback) {
@@ -80,7 +80,7 @@ function friendlyYtDlpError(stderr, fallback) {
   if (/sign in to confirm you.re not a bot/i.test(message)) {
     return getCookieArgs().length
       ? 'O YouTube recusou a sessão configurada. Entre novamente no YouTube, atualize os cookies e reinicie o serviço.'
-      : 'O YouTube pediu autenticação. Configure YOUTUBE_COOKIES_BROWSER no uso local ou YOUTUBE_COOKIES_BASE64 no servidor.';
+      : 'O YouTube bloqueou o acesso anônimo desta conexão. Se estiver usando o Render, execute o aplicativo no seu computador e tente novamente. Cookies pessoais não são obrigatórios nem recomendados para um serviço público; nenhum ajuste garante remover um bloqueio do YouTube.';
   }
   if (/could not copy chrome cookie database|database is locked/i.test(message)) {
     return 'Não foi possível ler os cookies do navegador. Feche completamente o navegador e tente novamente, ou use YOUTUBE_COOKIES_BASE64.';
@@ -519,13 +519,18 @@ app.post('/api/download', async (request, response) => {
 
   let isAborted = false;
   let currentChild = null;
+  let cleaned = false;
+  let succeeded = 0;
 
   const cleanupJob = () => {
+    if (cleaned) return;
+    cleaned = true;
     activeJobsCount = Math.max(0, activeJobsCount - 1);
     activeIpJobs.delete(clientIp);
   };
 
-  request.on('close', () => {
+  response.on('close', () => {
+    if (response.writableEnded) return;
     isAborted = true;
     if (currentChild) {
       try {
@@ -578,6 +583,7 @@ app.post('/api/download', async (request, response) => {
 
       const args = [
         '--no-config',
+        '--no-playlist',
         '--no-exec',
         '--no-cache-dir',
         '--newline',
@@ -657,7 +663,7 @@ app.post('/api/download', async (request, response) => {
             rejectPromise(new Error(friendlyYtDlpError(stderr, `Falha ao processar item ${item.title}`)));
           }
         });
-      }).catch((error) => {
+      }).then(() => { if (!isAborted) succeeded += 1; }).catch((error) => {
         if (!isAborted) {
           send({ type: 'item-error', item: index + 1, itemId: item.id, message: error.message });
         }
@@ -665,7 +671,7 @@ app.post('/api/download', async (request, response) => {
     }
 
     if (!isAborted) {
-      send({ type: 'complete', folder: targetFolder });
+      send({ type: 'complete', folder: targetFolder, succeeded, failed: safeItems.length - succeeded });
       response.end();
     }
   } catch (err) {
@@ -747,13 +753,23 @@ app.get('/api/stream', async (request, response) => {
     }
   };
 
-  // Cabeçalhos de segurança obrigatórios para entrega de arquivos
-  response.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
-  response.setHeader('X-Content-Type-Options', 'nosniff');
-  response.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(sanitizedTitle)}"`);
-
+  let tempFolder;
+  let child;
+  const onDisconnect = () => { if (!response.writableEnded) child?.kill(); };
+  response.on('close', onDisconnect);
+  try {
+  if (response.destroyed) return;
+  if (process.env.DOWNLOADS_ENABLED === 'false') {
+    return response.status(503).json({ error: 'Downloads desativados.' });
+  }
+  await mkdir(outputRoot, { recursive: true });
+  if (await checkFreeDisk(outputRoot) < MIN_FREE_DISK_MB) {
+    return response.status(507).json({ error: 'Espaço insuficiente para preparar o arquivo.' });
+  }
+  tempFolder = await mkdtemp(join(resolve(outputRoot), '.stream-'));
   const args = [
     '--no-config',
+    '--no-playlist',
     '--no-exec',
     '--no-cache-dir',
     '--no-warnings',
@@ -762,42 +778,57 @@ app.get('/api/stream', async (request, response) => {
     '--ffmpeg-location',
     ffmpegPath,
     '-o',
-    '-',
+    join(tempFolder, 'media.%(ext)s'),
     ...getCookieArgs(),
     ...getExtractorArgs(),
   ];
 
   if (isAudio) {
-    args.push('-f', 'ba/b', '--extract-audio', '--audio-format', ext, '--audio-quality', ext === 'mp3' ? '0' : '5');
+    args.push('-f', 'ba/b', '--extract-audio', '--audio-format', ext, '--audio-quality', ext === 'mp3' ? '320K' : '256K');
   } else {
     const height = String(quality).match(/(2160|1080|720)/)?.[1] || '1080';
-    args.push('-f', `bv*[height<=${height}]+ba/b[height<=${height}]/b`, '--merge-output-format', ext);
+    const format = ext === 'webm'
+      ? `bv[ext=webm][height<=${height}]+ba[ext=webm]/b[ext=webm][height<=${height}]`
+      : `bv*[height<=${height}]+ba/b[height<=${height}]`;
+    args.push('-f', format, '--merge-output-format', ext, '--remux-video', ext);
   }
 
   // Delimitador de argumentos contra injeção de flags
   args.push('--', validation.sanitizedUrl);
 
-  const child = spawn(ytDlpPath, args, { windowsHide: true });
-  request.on('close', () => {
-    try {
-      child.kill('SIGTERM');
-    } catch {
-      // Ignora
+  await new Promise((resolveDownload, rejectDownload) => {
+    child = spawn(ytDlpPath, args, { windowsHide: true });
+    let stderr = '';
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; child.kill(); }, JOB_TIMEOUT_MS);
+    child.stdout.resume();
+    child.stderr.on('data', (chunk) => { stderr = (stderr + chunk).slice(-16000); });
+    child.on('error', (error) => { clearTimeout(timer); rejectDownload(error); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      child = null;
+      if (code === 0 && !timedOut) resolveDownload();
+      else rejectDownload(new Error(timedOut ? 'Tempo limite de download excedido.' : friendlyYtDlpError(stderr, 'Não foi possível baixar o arquivo.')));
+    });
+  });
+  const file = join(tempFolder, `media.${ext}`);
+  if (!(await stat(file)).size) throw new Error('O download retornou um arquivo vazio.');
+  if (response.destroyed) return;
+  await new Promise((resolveSend, rejectSend) => {
+    response.download(file, sanitizedTitle, { dotfiles: 'allow' }, (error) => error ? rejectSend(error) : resolveSend());
+  });
+  } catch (error) {
+    if (!response.headersSent && !response.destroyed) {
+      response.status(502).json({ error: error instanceof Error ? error.message : 'Falha no download.' });
+    }
+  } finally {
+    response.off('close', onDisconnect);
+    // Remove somente o diretório temporário criado para esta requisição.
+    if (tempFolder && dirname(tempFolder) === resolve(outputRoot)) {
+      await rm(tempFolder, { recursive: true, force: true }).catch(() => {});
     }
     safeRelease();
-  });
-
-  child.stdout.pipe(response);
-  child.stderr.on('data', () => {});
-  child.on('close', () => {
-    safeRelease();
-  });
-  child.on('error', () => {
-    safeRelease();
-    if (!response.headersSent) {
-      response.status(500).json({ error: 'Erro no stream do download.' });
-    }
-  });
+  }
 });
 
 const server = app.listen(PORT, HOST, () => {

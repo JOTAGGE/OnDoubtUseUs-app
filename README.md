@@ -1,5 +1,24 @@
 # :) On Doubt, Use Us — Software by Blue Lab
 
+## Baixar sem cookies (uso local)
+
+Com Node.js 22.13 ou superior instalado, execute `npm install` e `npm run dev`
+na pasta do projeto e abra `http://localhost:3000`. No modo de desenvolvimento,
+a interface usa automaticamente a API local, sem passar pelo Render. Se você
+já configurou `NEXT_PUBLIC_API_URL`, remova essa configuração ou use
+`http://127.0.0.1:8787`. Os arquivos vão para `Downloads/On Doubt Use Us`.
+
+Não é necessário criar variáveis de cookies nem conectar sua conta para tentar
+baixar vídeos públicos. O backend habilita o runtime JavaScript usado pelo yt-dlp.
+O YouTube ainda pode bloquear uma conexão anônima, especialmente em hospedagens:
+essa alteração não garante desbloquear o IP do Render. Vídeos privados ou com
+restrição de acesso podem exigir autenticação. Não compartilhe cookies pessoais
+como credencial de um serviço público. Baixe apenas conteúdo que você tem direito
+de salvar.
+
+Na entrega pelo navegador, o servidor agora finaliza a conversão/união de áudio
+e vídeo antes de enviar o arquivo; falhas retornam um erro, não um download vazio.
+
 > **Forever free. Unlimited. No ads. No nonsense.**  
 > A clean and simple media downloader built for people who just want things to work.
 

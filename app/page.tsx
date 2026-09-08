@@ -598,6 +598,7 @@ export default function Home() {
       const isRemote = !apiUrl.includes('127.0.0.1') && !apiUrl.includes('localhost');
 
       if (isRemote) {
+        let succeeded = 0;
         // Modo Nuvem / Web: baixa item por item de forma sequencial sem sobrecarregar o servidor
         // e sem redirecionar a aba do usuário para telas de erro
         for (let i = 0; i < items.length; i++) {
@@ -637,6 +638,7 @@ export default function Home() {
             }
 
             const blob = await streamRes.blob();
+            if (!blob.size) throw new Error('O servidor retornou um arquivo vazio.');
             const blobUrl = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.style.display = 'none';
@@ -644,6 +646,7 @@ export default function Home() {
             a.download = `${item.title.replace(/[\\/:*?"<>|]/g, '_')}.${ext}`;
             document.body.appendChild(a);
             a.click();
+            succeeded += 1;
             setTimeout(() => {
               document.body.removeChild(a);
               window.URL.revokeObjectURL(blobUrl);
@@ -660,8 +663,8 @@ export default function Home() {
           setProgress(100);
           setStatus(
             lang === 'pt'
-              ? `Concluído! Todos os arquivos foram baixados no seu dispositivo.`
-              : `Completed! All media files saved to your device.`
+              ? `${succeeded}/${items.length} arquivos enviados ao navegador. ${items.length - succeeded} falhas.`
+              : `${succeeded}/${items.length} files sent to your browser. ${items.length - succeeded} failed.`
           );
         }
         setDownloading(false);
@@ -715,8 +718,11 @@ export default function Home() {
             }
             if (event.type === 'complete') {
               setProgress(100);
-              setStatus(`${t.downloadDone} ${event.folder}`);
+              setStatus(event.failed
+                ? `${event.succeeded}/${items.length} ${lang === 'pt' ? 'arquivos salvos; houve falhas.' : 'files saved; some failed.'}`
+                : `${t.downloadDone} ${event.folder}`);
             }
+            if (event.type === 'fatal-error') throw new Error(event.message);
           }
         }
       }
