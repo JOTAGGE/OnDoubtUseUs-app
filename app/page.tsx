@@ -87,8 +87,6 @@ function safeThumbnail(url: string, id: string): string {
 
 type Language = 'pt' | 'en';
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8787';
-
 const translations = {
   en: {
     heroKicker: 'BLUE LAB EXPERIMENTAL UTILITY // 2026',
@@ -105,7 +103,10 @@ const translations = {
     serverOffline: 'SERVER OFFLINE',
     serverWarning: 'Local backend service is unreachable at',
     serverWarningAction: 'Run "npm run dev" or "npm run dev:server" in terminal.',
+    serverWarningHttps: 'Notice: You are accessing via HTTPS (Vercel). Web browsers block requests to http://127.0.0.1 (Mixed Content). Run locally via "npm run dev" and open http://localhost:3000, or enter a cloud HTTPS backend in Settings (⚙️).',
     serverReconnect: 'Reconnect',
+    diagSaveUrl: 'Save URL',
+    diagResetUrl: 'Reset to Localhost',
 
     toolBadge: 'ODUU // UTILITY CONSOLE v1.0.0',
     toolHeadline: 'PASTE LINK. CHOOSE QUALITY. SAVE LOCALLY.',
@@ -262,7 +263,10 @@ const translations = {
     serverOffline: 'SERVIDOR OFFLINE',
     serverWarning: 'O serviço local não foi detectado em',
     serverWarningAction: 'Execute "npm run dev" ou "npm run dev:server" no terminal.',
+    serverWarningHttps: 'Aviso: Você está acessando via HTTPS (Vercel). Os navegadores bloqueiam conexões para http://127.0.0.1 por segurança (Conteúdo Misto). Para usar seu serviço local, execute "npm run dev" e acesse http://localhost:3000, ou conecte um backend HTTPS nas Configurações (⚙️).',
     serverReconnect: 'Reconectar',
+    diagSaveUrl: 'Salvar URL',
+    diagResetUrl: 'Restaurar Localhost',
 
     toolBadge: 'ODUU // CONSOLE DE UTILITÁRIO v1.0.0',
     toolHeadline: 'COLE O LINK. ESCOLHA O FORMATO. SALVE LOCALMENTE.',
@@ -425,6 +429,9 @@ export default function Home() {
   const [serverStatus, setServerStatus] = useState<'checking' | 'online' | 'offline'>('checking');
   const [serverInfo, setServerInfo] = useState<ServerHealth | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [apiUrl, setApiUrl] = useState<string>('http://127.0.0.1:8787');
+  const [customApiInput, setCustomApiInput] = useState<string>('http://127.0.0.1:8787');
+  const [isHttpsOnClient, setIsHttpsOnClient] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -432,10 +439,23 @@ export default function Home() {
   const t = translations[lang];
   const total = useMemo(() => selected.length * (mode === 'video' ? 84 : 12), [selected, mode]);
 
-  // Carrega idioma e tema salvos
+  // Carrega idioma, tema e URL do backend salvos
   useEffect(() => {
     const timer = setTimeout(() => {
       try {
+        if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
+          setIsHttpsOnClient(true);
+        }
+        const savedApi = localStorage.getItem('oduu_api_url');
+        const defaultApi = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8787';
+        if (savedApi) {
+          setApiUrl(savedApi);
+          setCustomApiInput(savedApi);
+        } else {
+          setApiUrl(defaultApi);
+          setCustomApiInput(defaultApi);
+        }
+
         const savedLang = localStorage.getItem('oduu_lang') as Language | null;
         if (savedLang && (savedLang === 'pt' || savedLang === 'en')) {
           setLang(savedLang);
@@ -474,9 +494,9 @@ export default function Home() {
     }
   }
 
-  async function checkServerHealth() {
+  async function checkServerHealth(targetUrl = apiUrl) {
     try {
-      const res = await fetch(`${API}/api/health`, { cache: 'no-store' });
+      const res = await fetch(`${targetUrl}/api/health`, { cache: 'no-store' });
       if (res.ok) {
         const data = (await res.json()) as ServerHealth;
         setServerStatus('online');
@@ -489,18 +509,43 @@ export default function Home() {
     }
   }
 
+  function saveCustomApiUrl(newUrl: string) {
+    const cleaned = newUrl.trim().replace(/\/+$/, '');
+    if (!cleaned) return;
+    setApiUrl(cleaned);
+    setCustomApiInput(cleaned);
+    try {
+      localStorage.setItem('oduu_api_url', cleaned);
+    } catch {
+      // Ignora erro
+    }
+    void checkServerHealth(cleaned);
+  }
+
+  function resetApiUrl() {
+    const defaultUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8787';
+    setApiUrl(defaultUrl);
+    setCustomApiInput(defaultUrl);
+    try {
+      localStorage.removeItem('oduu_api_url');
+    } catch {
+      // Ignora erro
+    }
+    void checkServerHealth(defaultUrl);
+  }
+
   useEffect(() => {
     const timer = setTimeout(() => {
-      void checkServerHealth();
+      void checkServerHealth(apiUrl);
     }, 0);
     const interval = setInterval(() => {
-      void checkServerHealth();
+      void checkServerHealth(apiUrl);
     }, 20000);
     return () => {
       clearTimeout(timer);
       clearInterval(interval);
     };
-  }, []);
+  }, [apiUrl]);
 
   async function analyzeUrl(value = url) {
     if (!value.trim()) return;
@@ -511,7 +556,7 @@ export default function Home() {
     setStatus(lang === 'pt' ? 'Consultando YouTube…' : 'Querying YouTube…');
 
     try {
-      const response = await fetch(`${API}/api/analyze`, {
+      const response = await fetch(`${apiUrl}/api/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: value.trim() }),
@@ -563,7 +608,7 @@ export default function Home() {
 
     try {
       const items = analysis.items.filter((item) => selected.includes(item.id));
-      const response = await fetch(`${API}/api/download`, {
+      const response = await fetch(`${apiUrl}/api/download`, {
         method: 'POST',
         signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
@@ -764,18 +809,35 @@ export default function Home() {
             <div className="flex items-center gap-2.5">
               <AlertCircle className="h-4 w-4 shrink-0 text-amber-500" />
               <span>
-                {t.serverWarning} <code className="px-1.5 py-0.5 rounded bg-black/20 font-bold">{API}</code>. {t.serverWarningAction}
+                {isHttpsOnClient && apiUrl.includes('127.0.0.1') ? (
+                  t.serverWarningHttps
+                ) : (
+                  <>
+                    {t.serverWarning} <code className="px-1.5 py-0.5 rounded bg-black/20 font-bold">{apiUrl}</code>. {t.serverWarningAction}
+                  </>
+                )}
               </span>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void checkServerHealth()}
-              className="h-7 text-xs border-amber-500/40 hover:bg-amber-500/20"
-            >
-              <RefreshCw className="mr-1.5 h-3 w-3" />
-              {t.serverReconnect}
-            </Button>
+            <div className="flex items-center gap-2 shrink-0">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setSettingsOpen(true)}
+                className="h-7 text-xs border-amber-500/40 hover:bg-amber-500/20"
+              >
+                <Settings2 className="mr-1.5 h-3 w-3" />
+                {lang === 'pt' ? 'Configurar API' : 'Configure API'}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void checkServerHealth()}
+                className="h-7 text-xs border-amber-500/40 hover:bg-amber-500/20"
+              >
+                <RefreshCw className="mr-1.5 h-3 w-3" />
+                {t.serverReconnect}
+              </Button>
+            </div>
           </div>
         </div>
       )}
@@ -1018,7 +1080,7 @@ export default function Home() {
 
                       {/* Direct browser download */}
                       <a
-                        href={`${API}/api/stream?url=${encodeURIComponent(item.url)}&type=${mode}&quality=${encodeURIComponent(
+                        href={`${apiUrl}/api/stream?url=${encodeURIComponent(item.url)}&type=${mode}&quality=${encodeURIComponent(
                           quality
                         )}&title=${encodeURIComponent(item.title)}`}
                         target="_blank"
@@ -1384,12 +1446,37 @@ export default function Home() {
           </DialogHeader>
 
           <div className="mt-4 space-y-3">
-            <div className={`rounded-xl border p-3.5 space-y-2 ${theme === 'dark' ? 'border-white/5 bg-black/40' : 'border-zinc-100 bg-zinc-50'}`}>
-              <div className="flex items-center justify-between text-xs">
-                <span className={theme === 'dark' ? 'text-zinc-400' : 'text-zinc-500'}>{t.diagApiUrl}</span>
-                <span className="font-mono text-xs font-bold text-[#0055ff]">{API}</span>
+            <div className={`rounded-xl border p-3.5 space-y-3 ${theme === 'dark' ? 'border-white/5 bg-black/40' : 'border-zinc-100 bg-zinc-50'}`}>
+              <div>
+                <label className={`block text-xs font-bold mb-1.5 ${theme === 'dark' ? 'text-zinc-300' : 'text-zinc-700'}`}>
+                  {t.diagApiUrl}
+                </label>
+                <div className="flex gap-2">
+                  <Input
+                    value={customApiInput}
+                    onChange={(e) => setCustomApiInput(e.target.value)}
+                    placeholder="http://127.0.0.1:8787 or https://..."
+                    className={`h-8 text-xs font-mono ${theme === 'dark' ? 'border-white/10 bg-black/50 text-white' : 'border-zinc-300 bg-white text-zinc-900'}`}
+                  />
+                  <Button
+                    size="sm"
+                    onClick={() => saveCustomApiUrl(customApiInput)}
+                    className="h-8 px-3 text-xs bg-[#0055ff] hover:bg-[#0047d6] text-white shrink-0 font-bold"
+                  >
+                    {t.diagSaveUrl}
+                  </Button>
+                </div>
+                {apiUrl !== (process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8787') && (
+                  <button
+                    onClick={resetApiUrl}
+                    className="mt-1.5 text-[11px] text-[#0055ff] hover:underline block"
+                  >
+                    {t.diagResetUrl}
+                  </button>
+                )}
               </div>
-              <div className="flex items-center justify-between text-xs">
+
+              <div className={`flex items-center justify-between text-xs pt-2 border-t ${theme === 'dark' ? 'border-white/5' : 'border-zinc-200'}`}>
                 <span className={theme === 'dark' ? 'text-zinc-400' : 'text-zinc-500'}>{t.diagConnection}</span>
                 <span className="flex items-center gap-1.5 font-bold">
                   {serverStatus === 'online' ? (
