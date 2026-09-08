@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "concurrently -k -n interface,downloads -c cyan,magenta \"npm:dev:ui\" \"npm:dev:server\"",
     "dev:ui": "vinext dev",
-    "dev:server": "node local-server.mjs",
+    "dev:server": "node --env-file-if-exists=.env local-server.mjs",
     "build": "vinext build",
     "start": "vinext start",
     "lint": "oxlint",

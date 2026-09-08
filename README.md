@@ -73,6 +73,42 @@ Copy `.env.example` to `.env` or `.env.local` to customize settings:
 | `CORS_ORIGIN` | `http://localhost:3000,http://127.0.0.1:3000` | Allowed origins (or `*`) |
 | `NEXT_PUBLIC_API_URL` | `http://127.0.0.1:8787` | API address consumed by the frontend |
 
+### YouTube authentication ("confirm you're not a bot")
+
+YouTube may require the same authenticated session used by a normal browser. The app supports two safe setup modes.
+
+**Local use**
+
+1. Sign in to YouTube in your browser and open any video.
+2. Add one of these lines to `.env`:
+
+   ```env
+   YOUTUBE_COOKIES_BROWSER=chrome
+   # Optional when you use a non-default profile:
+   # YOUTUBE_COOKIES_BROWSER_PROFILE=Default
+   ```
+
+   Supported values include `chrome`, `edge`, `firefox`, `brave`, `chromium`, `opera`, `vivaldi`, and `safari`.
+3. Restart `npm run dev`. If Windows reports that the cookie database is locked, close the browser completely before restarting the app.
+
+**Render or another hosted backend**
+
+A hosted server cannot read cookies from your local browser. Export a fresh Netscape-format `cookies.txt` from a dedicated browser profile, encode it as base64, and create a **secret** environment variable named `YOUTUBE_COOKIES_BASE64` in the hosting dashboard. Restart/redeploy the backend afterward.
+
+PowerShell:
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("cookies.txt"))
+```
+
+Linux/macOS:
+
+```bash
+base64 < cookies.txt | tr -d '\n'
+```
+
+Never commit `cookies.txt`, `.env`, or the base64 value. Cookies grant access to your signed-in account and should be refreshed if YouTube rejects the session.
+
 ---
 
 ## 🐳 Docker Container Deploy

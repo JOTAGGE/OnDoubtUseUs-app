@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { existsSync, writeFileSync } from 'node:fs';
 import { mkdir, statfs } from 'node:fs/promises';
@@ -13,26 +13,79 @@ const youtubeDl = require('youtube-dl-exec');
 const ffmpegPath = require('ffmpeg-static');
 const ytDlpPath = youtubeDl.constants.YOUTUBE_DL_PATH;
 
-// Suporte a cookies do YouTube (para contornar restrições severas em IPs de datacenter/cloud)
-const cookiesFilePath = join(process.cwd(), 'cookies.txt');
-if (process.env.YOUTUBE_COOKIES && !existsSync(cookiesFilePath)) {
+// Autenticação opcional do YouTube. Cookies nunca são salvos no repositório.
+const generatedCookiesPath = join(tmpdir(), `ondoubt-youtube-cookies-${process.pid}.txt`);
+const configuredCookiesPath = process.env.YOUTUBE_COOKIES_FILE
+  ? resolve(process.env.YOUTUBE_COOKIES_FILE)
+  : null;
+let activeCookiesPath = configuredCookiesPath && existsSync(configuredCookiesPath)
+  ? configuredCookiesPath
+  : null;
+
+function normalizeCookieFile(content) {
+  const normalized = process.platform === 'win32'
+    ? content.replace(/\r?\n/g, '\r\n')
+    : content.replace(/\r\n/g, '\n');
+  if (!/^# (Netscape )?HTTP Cookie File/m.test(normalized)) {
+    throw new Error('O conteúdo não está no formato Netscape cookies.txt.');
+  }
+  return normalized;
+}
+
+function loadCookiesFromEnvironment() {
+  const base64Value = process.env.YOUTUBE_COOKIES_BASE64?.trim();
+  const legacyValue = process.env.YOUTUBE_COOKIES?.trim();
+  if (!base64Value && !legacyValue) return;
+
   try {
-    const raw = process.env.YOUTUBE_COOKIES.trim();
-    const content = raw.startsWith('ey') || raw.includes('base64')
-      ? Buffer.from(raw, 'base64').toString('utf-8')
-      : raw;
-    writeFileSync(cookiesFilePath, content, 'utf-8');
-    console.log('[On Doubt, Use Us :)] Cookies do YouTube carregados com sucesso.');
-  } catch (err) {
-    console.error('[On Doubt, Use Us :)] Erro ao gravar cookies:', err);
+    let content;
+    if (base64Value) {
+      content = Buffer.from(base64Value, 'base64').toString('utf8');
+    } else if (legacyValue.startsWith('#')) {
+      content = legacyValue;
+    } else {
+      // Compatibilidade com versões anteriores, que aceitavam base64 em YOUTUBE_COOKIES.
+      content = Buffer.from(legacyValue, 'base64').toString('utf8');
+    }
+    writeFileSync(generatedCookiesPath, normalizeCookieFile(content), { encoding: 'utf8', mode: 0o600 });
+    activeCookiesPath = generatedCookiesPath;
+    console.log('[On Doubt, Use Us :)] Sessão do YouTube carregada por variável secreta.');
+  } catch (error) {
+    activeCookiesPath = null;
+    console.error(`[On Doubt, Use Us :)] Cookies ignorados: ${error instanceof Error ? error.message : 'formato inválido'}`);
   }
 }
 
+loadCookiesFromEnvironment();
+
+const supportedCookieBrowsers = new Set(['brave', 'chrome', 'chromium', 'edge', 'firefox', 'opera', 'safari', 'vivaldi', 'whale']);
+const cookieBrowser = process.env.YOUTUBE_COOKIES_BROWSER?.trim().toLowerCase();
+
 function getCookieArgs() {
-  if (existsSync(cookiesFilePath)) {
-    return ['--cookies', cookiesFilePath];
+  if (activeCookiesPath) return ['--cookies', activeCookiesPath];
+  if (cookieBrowser && supportedCookieBrowsers.has(cookieBrowser)) {
+    const profile = process.env.YOUTUBE_COOKIES_BROWSER_PROFILE?.trim();
+    return ['--cookies-from-browser', profile ? `${cookieBrowser}:${profile}` : cookieBrowser];
   }
   return [];
+}
+
+function getExtractorArgs() {
+  const clients = process.env.YOUTUBE_PLAYER_CLIENTS?.trim();
+  return clients ? ['--extractor-args', `youtube:player_client=${clients}`] : [];
+}
+
+function friendlyYtDlpError(stderr, fallback) {
+  const message = String(stderr || '').trim();
+  if (/sign in to confirm you.re not a bot/i.test(message)) {
+    return getCookieArgs().length
+      ? 'O YouTube recusou a sessão configurada. Entre novamente no YouTube, atualize os cookies e reinicie o serviço.'
+      : 'O YouTube pediu autenticação. Configure YOUTUBE_COOKIES_BROWSER no uso local ou YOUTUBE_COOKIES_BASE64 no servidor.';
+  }
+  if (/could not copy chrome cookie database|database is locked/i.test(message)) {
+    return 'Não foi possível ler os cookies do navegador. Feche completamente o navegador e tente novamente, ou use YOUTUBE_COOKIES_BASE64.';
+  }
+  return message || fallback;
 }
 
 // --- Configurações de Ambiente & Limites de Segurança ---
@@ -285,8 +338,7 @@ function runJson(url) {
       '--no-warnings',
       '--ignore-errors',
       ...getCookieArgs(),
-      '--extractor-args',
-      'youtube:player_client=ios,android,web',
+      ...getExtractorArgs(),
       '--', // Impede injeção de flags através da URL
       url,
     ];
@@ -317,7 +369,7 @@ function runJson(url) {
     child.on('close', (code) => {
       clearTimeout(timeout);
       if (code !== 0 || !stdout.trim()) {
-        return rejectPromise(new Error(stderr.trim() || 'Não foi possível consultar esse link do YouTube.'));
+        return rejectPromise(new Error(friendlyYtDlpError(stderr, 'Não foi possível consultar esse link do YouTube.')));
       }
       try {
         resolvePromise(JSON.parse(stdout));
@@ -343,6 +395,7 @@ app.get('/api/health', async (_request, response) => {
     activeJobs: activeJobsCount,
     freeDiskMb,
     downloadsEnabled: process.env.DOWNLOADS_ENABLED !== 'false',
+    youtubeAuth: activeCookiesPath ? 'cookie-file' : cookieBrowser ? 'browser' : 'none',
   });
 });
 
@@ -553,8 +606,7 @@ app.post('/api/download', async (request, response) => {
 
       args.push(
         ...getCookieArgs(),
-        '--extractor-args',
-        'youtube:player_client=ios,android,web',
+        ...getExtractorArgs(),
         '--',
         item.url
       );
@@ -602,7 +654,7 @@ app.post('/api/download', async (request, response) => {
           if (code === 0 || isAborted) {
             resolvePromise();
           } else {
-            rejectPromise(new Error(stderr.trim().split(/\r?\n/).at(-1) || `Falha ao processar item ${item.title}`));
+            rejectPromise(new Error(friendlyYtDlpError(stderr, `Falha ao processar item ${item.title}`)));
           }
         });
       }).catch((error) => {
@@ -712,8 +764,7 @@ app.get('/api/stream', async (request, response) => {
     '-o',
     '-',
     ...getCookieArgs(),
-    '--extractor-args',
-    'youtube:player_client=ios,android,web',
+    ...getExtractorArgs(),
   ];
 
   if (isAudio) {
