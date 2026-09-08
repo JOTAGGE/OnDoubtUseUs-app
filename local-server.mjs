@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { existsSync, writeFileSync } from 'node:fs';
 import { mkdir, statfs } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 
@@ -11,6 +12,28 @@ const require = createRequire(import.meta.url);
 const youtubeDl = require('youtube-dl-exec');
 const ffmpegPath = require('ffmpeg-static');
 const ytDlpPath = youtubeDl.constants.YOUTUBE_DL_PATH;
+
+// Suporte a cookies do YouTube (para contornar restrições severas em IPs de datacenter/cloud)
+const cookiesFilePath = join(process.cwd(), 'cookies.txt');
+if (process.env.YOUTUBE_COOKIES && !existsSync(cookiesFilePath)) {
+  try {
+    const raw = process.env.YOUTUBE_COOKIES.trim();
+    const content = raw.startsWith('ey') || raw.includes('base64')
+      ? Buffer.from(raw, 'base64').toString('utf-8')
+      : raw;
+    writeFileSync(cookiesFilePath, content, 'utf-8');
+    console.log('[On Doubt, Use Us :)] Cookies do YouTube carregados com sucesso.');
+  } catch (err) {
+    console.error('[On Doubt, Use Us :)] Erro ao gravar cookies:', err);
+  }
+}
+
+function getCookieArgs() {
+  if (existsSync(cookiesFilePath)) {
+    return ['--cookies', cookiesFilePath];
+  }
+  return [];
+}
 
 // --- Configurações de Ambiente & Limites de Segurança ---
 const PORT = Number(process.env.PORT || 8787);
@@ -261,6 +284,9 @@ function runJson(url) {
       '--flat-playlist',
       '--no-warnings',
       '--ignore-errors',
+      ...getCookieArgs(),
+      '--extractor-args',
+      'youtube:player_client=ios,android,web',
       '--', // Impede injeção de flags através da URL
       url,
     ];
@@ -515,18 +541,23 @@ app.post('/api/download', async (request, response) => {
 
       if (type === 'audio') {
         const audioFormat = String(quality).includes('M4A') ? 'm4a' : String(quality).includes('FLAC') ? 'flac' : 'mp3';
-        args.push('--extract-audio', '--audio-format', audioFormat, '--audio-quality', audioFormat === 'mp3' ? '0' : '5');
+        args.push('-f', 'ba/b', '--extract-audio', '--audio-format', audioFormat, '--audio-quality', audioFormat === 'mp3' ? '0' : '5');
       } else {
         const height = String(quality).match(/(2160|1080|720)/)?.[1] || '1080';
-        args.push('--format', `bv*[height<=${height}]+ba/b[height<=${height}]`, '--merge-output-format', String(quality).includes('WEBM') ? 'webm' : 'mp4');
+        args.push('-f', `bv*[height<=${height}]+ba/b[height<=${height}]/b`, '--merge-output-format', String(quality).includes('WEBM') ? 'webm' : 'mp4');
       }
 
       if (saveExtras) {
         args.push('--write-thumbnail', '--write-info-json', '--add-metadata');
       }
 
-      // '--' delimita explicitamente argumentos para bloquear injeção de flags
-      args.push('--', item.url);
+      args.push(
+        ...getCookieArgs(),
+        '--extractor-args',
+        'youtube:player_client=ios,android,web',
+        '--',
+        item.url
+      );
 
       await new Promise((resolvePromise, rejectPromise) => {
         const child = spawn(ytDlpPath, args, { windowsHide: true });
@@ -680,13 +711,16 @@ app.get('/api/stream', async (request, response) => {
     ffmpegPath,
     '-o',
     '-',
+    ...getCookieArgs(),
+    '--extractor-args',
+    'youtube:player_client=ios,android,web',
   ];
 
   if (isAudio) {
-    args.push('--extract-audio', '--audio-format', ext, '--audio-quality', ext === 'mp3' ? '0' : '5');
+    args.push('-f', 'ba/b', '--extract-audio', '--audio-format', ext, '--audio-quality', ext === 'mp3' ? '0' : '5');
   } else {
     const height = String(quality).match(/(2160|1080|720)/)?.[1] || '1080';
-    args.push('--format', `bv*[height<=${height}]+ba/b[height<=${height}]`, '--merge-output-format', ext);
+    args.push('-f', `bv*[height<=${height}]+ba/b[height<=${height}]/b`, '--merge-output-format', ext);
   }
 
   // Delimitador de argumentos contra injeção de flags
