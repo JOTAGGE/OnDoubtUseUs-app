@@ -16,8 +16,10 @@
     "cap:add:android": "cap add android",
     "cap:sync": "cap sync",
     "cap:open:android": "cap open android",
-    "build:android": "npm run build && cap sync android",
-    "build:apk": "npm run build && cap sync android && powershell -Command \"cd android; .\\gradlew.bat assembleDebug\"",
+    "prepare:android": "node scripts/prepare-android.mjs",
+    "icons:android": "powershell -ExecutionPolicy Bypass -File scripts/generate-icons.ps1",
+    "build:android": "npm run build && npm run prepare:android && cap sync android",
+    "build:apk": "npm run build && npm run prepare:android && cap sync android && powershell -Command \"cd android; .\\gradlew.bat assembleDebug\"",
     "lint": "oxlint",
     "format": "oxfmt"
   },
