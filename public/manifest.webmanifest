@@ -1,0 +1,24 @@
+{
+  "name": "On Doubt, Use Us :)",
+  "short_name": "ODUU",
+  "description": "Clean, high-performance media downloader application engineered by Blue Lab.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    }
+  ],
+  "categories": ["utilities", "productivity", "multimedia"]
+}
